@@ -1,6 +1,6 @@
 use iced::{
-    button, text_input, window, Button, Color, Column, Container, Element, HorizontalAlignment,
-    Length, Row, Sandbox, Settings, Space, Text, TextInput,
+    button, scrollable, text_input, window, Button, Color, Column, Container, Element,
+    HorizontalAlignment, Length, Row, Sandbox, Scrollable, Settings, Space, Text, TextInput,
 };
 use std::mem;
 
@@ -18,16 +18,30 @@ fn main() -> iced::Result {
 #[derive(Clone, Debug)]
 enum TodoMessage {
     InputChange(String),
+    Create,
     Submit,
     Cancel,
     ChooseItem(usize),
+    DeleteItem(usize),
 }
 
-#[derive(Debug, Default)]
+enum RightColumn {
+    Editor(TodoEditor),
+    Welcome(Welcome),
+}
+
+impl Default for RightColumn {
+    fn default() -> Self {
+        return RightColumn::Welcome(Welcome::default());
+    }
+}
+
+#[derive(Default)]
 struct Todo {
-    todo_editor: TodoEditor,
+    right_column: RightColumn,
     list: Vec<TodoItem>,
     selected_index: Option<usize>,
+    list_scrollable: scrollable::State,
 }
 
 impl Sandbox for Todo {
@@ -42,51 +56,73 @@ impl Sandbox for Todo {
     }
 
     fn view(&mut self) -> Element<Self::Message> {
-        let header = Text::new(String::from("hello world"))
-            .width(Length::Fill)
-            .horizontal_alignment(HorizontalAlignment::Center);
-        // let list: Vec<Element<Self::Message>> = self.list.iter().map(|s| s.view()).collect();
-        let todo_list = Container::new(Column::with_children(
-            self.list
-                .iter_mut()
-                .enumerate()
-                .map(|(i, s)| s.view(i, self.selected_index.map_or(false, |index| index == i)))
-                .collect(),
-        ))
-        .width(Length::FillPortion(1));
-        // .style(BG);
+        let header = Container::new(
+            Text::new("Todo App")
+                .width(Length::Fill)
+                .size(40)
+                .horizontal_alignment(HorizontalAlignment::Center),
+        )
+        .padding(20)
+        .width(Length::Fill);
+
+        let mut todo_list =
+            Scrollable::new(&mut self.list_scrollable).width(Length::FillPortion(1));
+        for (i, item) in self.list.iter_mut().enumerate() {
+            todo_list =
+                todo_list.push(item.view(i, self.selected_index.map_or(false, |index| index == i)));
+        }
+
+        let right_column = match &mut self.right_column {
+            RightColumn::Editor(editor) => editor.view(),
+            RightColumn::Welcome(welcome) => welcome.view(),
+        };
         let content = Row::new()
             .push(todo_list)
-            .push(self.todo_editor.view())
+            .push(right_column)
             .width(Length::FillPortion(2));
         return Column::new().push(header).push(content).into();
     }
 
     fn update(&mut self, message: Self::Message) {
-        // println!("{:?}", message);
         match message {
             TodoMessage::InputChange(s) => {
-                self.todo_editor.update(TodoEditorMessage::InputChange(s));
+                if let RightColumn::Editor(editor) = &mut self.right_column {
+                    editor.update(TodoEditorMessage::InputChange(s));
+                }
             }
             TodoMessage::Submit => {
-                if !self.todo_editor.item.value.is_empty() {
-                    let todo_editor = mem::take(&mut self.todo_editor);
-                    let item = todo_editor.item;
-                    if let Some(index) = todo_editor.index {
-                        self.list[index] = item;
-                    } else {
-                        self.list.push(item);
+                if let RightColumn::Editor(editor) = &mut self.right_column {
+                    if !editor.item.value.is_empty() {
+                        let editor = mem::take(editor);
+                        let item = editor.item;
+                        if let Some(index) = editor.index {
+                            self.list[index] = item;
+                        } else {
+                            self.list.push(item);
+                        }
+                        self.update(TodoMessage::Cancel);
                     }
-                    self.selected_index = None;
                 }
             }
             TodoMessage::Cancel => {
-                self.todo_editor = TodoEditor::default();
+                self.right_column = RightColumn::Welcome(Welcome::default());
+                self.selected_index = None;
+            }
+            TodoMessage::Create => {
+                let mut editor = TodoEditor::default();
+                editor.update(TodoEditorMessage::InputFocus);
+                self.right_column = RightColumn::Editor(editor);
                 self.selected_index = None;
             }
             TodoMessage::ChooseItem(i) => {
-                self.todo_editor = TodoEditor::from(&self.list[i], i);
+                let mut editor = TodoEditor::from(&self.list[i], i);
+                editor.update(TodoEditorMessage::InputFocus);
+                self.right_column = RightColumn::Editor(editor);
                 self.selected_index = Some(i);
+            }
+            TodoMessage::DeleteItem(i) => {
+                self.list.remove(i);
+                self.update(TodoMessage::Cancel);
             }
         }
     }
@@ -96,9 +132,33 @@ impl Sandbox for Todo {
     }
 }
 
+#[derive(Default)]
+struct Welcome {
+    create_button: button::State,
+}
+
+impl Welcome {
+    fn view(&mut self) -> Column<TodoMessage> {
+        return Column::new()
+            .push(padding_text("Welcome to Todo, an app based on Iced"))
+            .push(padding_text("Click a Todo Item on the left to edit"))
+            .push(
+                Row::new()
+                    .push(padding_text("Or add a new item here:"))
+                    .push(
+                        Button::new(&mut self.create_button, Text::new("Create Item"))
+                            .on_press(TodoMessage::Create),
+                    ),
+            )
+            .padding(5)
+            .width(Length::FillPortion(2))
+            .padding(20);
+    }
+}
+
 enum TodoEditorMessage {
     InputChange(String),
-    // SubmitChange,
+    InputFocus,
 }
 
 #[derive(Debug, Default)]
@@ -108,6 +168,7 @@ struct TodoEditor {
     input: text_input::State,
     submit_button: button::State,
     cancel_button: button::State,
+    delete_button: button::State,
 }
 
 impl TodoEditor {
@@ -121,6 +182,10 @@ impl TodoEditor {
     fn update(&mut self, message: TodoEditorMessage) {
         match message {
             TodoEditorMessage::InputChange(s) => self.item.value = s,
+            TodoEditorMessage::InputFocus => {
+                self.input.move_cursor_to_end();
+                self.input.focus();
+            }
         }
     }
     fn view(&mut self) -> Column<TodoMessage> {
@@ -130,16 +195,29 @@ impl TodoEditor {
             &self.item.value,
             TodoMessage::InputChange,
         )
-        // .width(Length::FillPortion(3))
+        .padding(2)
         .on_submit(TodoMessage::Submit);
         let submit_button = Button::new(&mut self.submit_button, Text::new("Submit".to_string()))
-            // .width(Length::FillPortion(3))
             .on_press(TodoMessage::Submit);
         let cancel_button = Button::new(&mut self.cancel_button, Text::new("Cancel".to_string()))
             .on_press(TodoMessage::Cancel);
         let text_area =
-            Container::new(Text::new("TextArea not support yet")).height(Length::Units(50));
-        let input_area = Column::new()
+            Container::new(padding_text("TextArea not support yet")).height(Length::Units(50));
+        let mut input_area = Column::new();
+
+        if let Some(index) = self.index {
+            input_area = input_area
+                .push(
+                    Row::new()
+                        .push(Space::new(Length::Fill, Length::Shrink))
+                        .push(
+                            Button::new(&mut self.delete_button, Text::new("Delete Item"))
+                                .on_press(TodoMessage::DeleteItem(index)),
+                        ),
+                )
+                .push(Space::new(Length::Fill, Length::Units(5)))
+        }
+        input_area = input_area
             .push(input)
             .push(text_area)
             .push(
@@ -156,7 +234,6 @@ impl TodoEditor {
 
 #[derive(Clone, Debug, Default)]
 struct TodoItem {
-    // index: Option<usize>,
     button: button::State,
     value: String,
 }
@@ -178,26 +255,15 @@ impl TodoItem {
             })
             .on_press(TodoMessage::ChooseItem(index))
             .width(Length::Fill);
-        return Container::new(button)
-            .width(Length::Fill)
-            // .style(BG)
-            .into();
+        return Container::new(button).width(Length::Fill).into();
     }
 }
-// struct BG;
-
-// impl container::StyleSheet for BG {
-//     fn style(&self) -> container::Style {
-//         container::Style {
-//             text_color: Some(Color::WHITE),
-//             background: Color::from_rgb8(249, 40, 20).into(),
-//             border_color: Color::from_rgb8(229, 20, 0),
-//             border_width: 5.0,
-//             border_radius: 8.0,
-//             ..container::Style::default()
-//         }
-//     }
-// }
+fn padding_text<'a, Message, T>(label: T) -> Container<'a, Message>
+where
+    T: Into<String>,
+{
+    return Container::new(Text::new(label)).padding(5);
+}
 
 #[derive(Debug)]
 enum ListItem {
